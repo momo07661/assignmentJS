@@ -1,0 +1,3 @@
+//root password: assignmentJS123
+//DB admin: test
+//password: assignmentJS123
