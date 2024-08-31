@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const session = require('express-session');
 const yahooFinance = require('yahoo-finance2').default;
+const cors = require('cors');
 
 // Initialize express app
 const app = express();
@@ -26,6 +27,13 @@ db.connect((err) => {
     console.log('Connected to MySQL');
 });
 
+// Use the CORS middleware
+app.use(cors({
+    origin: 'http://localhost:3001', // Replace with frontend URL
+    methods: 'GET,POST,PUT,DELETE',
+    credentials: true, // dealing with cookies or sessions
+}));
+
 // Middleware for parsing JSON and form data
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -46,7 +54,7 @@ const authenticateToken = (req, res, next) => {
     const token = req.headers['authorization']?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Access denied' });
 
-    jwt.verify(token, 'your_jwt_secret', (err, user) => {
+    jwt.verify(token, 'jwt_secret', (err, user) => {
         if (err) return res.status(403).json({ error: 'Invalid token' });
         req.user = user;
         next();
@@ -82,11 +90,8 @@ app.post('/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Insert the new user into the users table
-        db.query('INSERT INTO users (username, password, cash) VALUES (?, ?)', [username, hashedPassword], (err, results) => {
+        db.query('INSERT INTO users (username, password) VALUES (?, ?)', [username, hashedPassword], (err) => {
             if (err) throw err;
-
-            // Get the newly created user's ID
-            const userId = results.insertId;
 
             res.status(201).json({ message: 'User registered successfully and cash initialized' });
         });
@@ -122,12 +127,12 @@ app.post('/login', (req, res) => {
             id: user.id,
             username: user.username,
             is_admin: user.is_admin // Include user role in the token payload
-        }, 'your_jwt_secret', { expiresIn: '1h' }); // Replace 'your_jwt_secret' with your secret key
+        }, 'jwt_secret', { expiresIn: '1h' }); // 'jwt_secret' with secret key
 
         // Set the session
         req.session.userId = user.id;
 
-        res.json({ message: 'Login successful', token });
+        res.json({ message: 'Login successful', token, is_admin: user.is_admin });
     });
 });
 
@@ -259,6 +264,29 @@ app.post('/quote', async (req, res) => {
     }
 });
 
+
+// Delete User Route
+app.delete('/admin/deleteUser', authenticateToken, authenticateAdmin, async (req, res) => {
+    const {username} = req.body;
+
+    // Check if the user ID is provided
+    if (!username) {
+        return res.status(400).json({ error: 'required data is needed' });
+    }
+
+    // Delete the user from the database
+    try {
+        // Assuming you use MySQL
+        await db.query('DELETE FROM users WHERE username = ?', [username]);
+
+        // Send success response
+        res.status(200).json({ message: 'User deleted successfully' });
+    } catch (err) {
+        console.error('Database error: delete user failed', err);
+        res.status(500).json({ error: 'Failed to delete user' });
+    }
+});
+
 // Add-money route
 app.post('/add-money', authenticateToken, authenticateAdmin, (req, res) => {
     const { userId, amount } = req.body;
@@ -277,6 +305,41 @@ app.post('/add-money', authenticateToken, authenticateAdmin, (req, res) => {
         res.json({ message: 'Money added successfully' });
     });
 });
+
+// Get balance route
+app.get('/balance', authenticateToken, (req, res) => {
+    const userId = req.user.id;
+
+    db.query('SELECT cash FROM users WHERE id = ?', [userId], (err, results) => {
+        if (err) return res.status(500).json({ message: 'Database error' });
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        res.json({ balance: results[0].cash });
+    });
+});
+
+// Get owned stocks route
+app.get('/owned-stocks', authenticateToken, (req, res) => {
+    const userId = req.user.id;
+
+    const query = `
+        SELECT symbol, SUM(shares) AS shares
+        FROM deals
+        WHERE user_id = ?
+        GROUP BY symbol
+    `;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) return res.status(500).json({ message: 'Database error' });
+
+        res.json({
+            stocks: results // Array of stocks with symbol and total shares
+        });
+    });
+});
+
 
 
 // Start the server
